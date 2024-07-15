@@ -1,0 +1,11 @@
+{
+    "cmake.additionalCompilerSearchDirs": [
+        "/opt/ezusbfx3sdk/arm-2013.11/"
+    ],
+    "cmake.ignoreKitEnv": false,
+    "cmake.automaticReconfigure": true,
+    "files.associations": {
+        "cyu3externcend.h": "c",
+        "ncm_desc.h": "c"
+    }
+}
