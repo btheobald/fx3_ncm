@@ -47,3 +47,4 @@ extern const usb_device_descriptor_t usb_device_desc;
 extern usb_desc_t usb_config_desc;
 
 extern const usb_cdc_ncm_ntb_parameters_t ntb_parameters;
+extern usb_cdc_ncm_ndp_input_size_t ntb_size;

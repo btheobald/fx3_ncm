@@ -467,15 +467,6 @@ CyBool_t CyFxAppUSBSetupCB(uint32_t setupdat0, uint32_t setupdat1) {
         }
     }
 
-    if ((bType == CY_U3P_USB_VENDOR_RQT) && (bTarget == CY_U3P_USB_TARGET_DEVICE)) {
-        /* We set an event here and let the application thread below handle these requests.
-         * isHandled needs to be set to True, so that the driver does not stall EP0. */
-        isHandled = CyTrue;
-        gl_setupdat0 = setupdat0;
-        gl_setupdat1 = setupdat1;
-        CyU3PEventSet (&glBulkLpEvent, CYFX_USB_CTRL_TASK, CYU3P_EVENT_OR);
-    }
-
     if (bType == CY_U3P_USB_CLASS_RQT && (bRequest == USB_CDC_GET_NTB_PARAMETERS)) {
         isHandled = CyTrue;
         gl_setupdat0 = setupdat0;
@@ -687,8 +678,7 @@ void CyFxAppInit(void) {
 /*
  * De-initialize function for the USB block. Used to test USB Stop/Start functionality.
  */
-static void
-CyFxAppDeinit(void) {
+static void CyFxAppDeinit(void) {
     if (glIsApplnActive) {
         CyFxAppStop ();
     }
@@ -758,156 +748,21 @@ void appThread_Entry(uint32_t input) {
                 wValue   = ((gl_setupdat0 & CY_U3P_USB_VALUE_MASK) >> CY_U3P_USB_VALUE_POS);
                 wIndex   = ((gl_setupdat1 & CY_U3P_USB_INDEX_MASK) >> CY_U3P_USB_INDEX_POS);
 
-                if ((bReqType & CY_U3P_USB_TYPE_MASK) == CY_U3P_USB_VENDOR_RQT) {
-                    switch (bRequest) {
-                    case 0x76:
-                        glEp0Buffer[0] = vendorRqtCnt;
-                        glEp0Buffer[1] = ~vendorRqtCnt;
-                        glEp0Buffer[2] = 1;
-                        glEp0Buffer[3] = 5;
-                        CyU3PUsbSendEP0Data(wLength, glEp0Buffer);
-                        vendorRqtCnt++;
-                        break;
-
-                    case 0x77:      /* Trigger remote wakeup. */
-                        CyU3PUsbAckSetup();
-                        CyU3PEventSet(&glBulkLpEvent, CYFX_USB_HOSTWAKE_TASK, CYU3P_EVENT_OR);
-                        break;
-
-                    case 0x78:      /* Get count of EP0 status events received. */
-                        CyU3PMemCopy((uint8_t *)glEp0Buffer, ((uint8_t *)&glEp0StatCount), 4);
-                        CyU3PUsbSendEP0Data(4, glEp0Buffer);
-                        break;
-
-                    case 0x79:      /* Request with no data phase. Insert a delay and then ACK the request. */
-                        CyU3PThreadSleep(5);
-                        CyU3PUsbAckSetup();
-                        break;
-
-                    case 0x80:      /* Request with OUT data phase. Just get the data and ignore it for now. */
-                        CyU3PUsbGetEP0Data(sizeof (glEp0Buffer), (uint8_t *)glEp0Buffer, &wLength);
-                        break;
-
-                    case 0x81:
-                        /* Get the current event log index and send it to the host. */
-                        if (wLength == 2) {
-                            temp = CyU3PUsbGetEventLogIndex();
-                            CyU3PMemCopy((uint8_t *)glEp0Buffer, (uint8_t *)&temp, 2);
-                            CyU3PUsbSendEP0Data(2, glEp0Buffer);
-                        } else {
-                            CyU3PUsbStall(0, CyTrue, CyFalse);
-                        }
-                        break;
-
-                    case 0x82:
-                        /* Send the USB event log buffer content to the host. */
-                        if (wLength != 0) {
-                            if (wLength < CYFX_USBLOG_SIZE) {
-                                CyU3PUsbSendEP0Data(wLength, gl_UsbLogBuffer);
-                            } else {
-                                CyU3PUsbSendEP0Data(CYFX_USBLOG_SIZE, gl_UsbLogBuffer);
-                            }
-                        } else {
-                            CyU3PUsbAckSetup();
-                        }
-                        break;
-
-                    case 0x83:
-                        {
-                            uint32_t addr = ((uint32_t)wValue << 16) | (uint32_t)wIndex;
-                            CyU3PReadDeviceRegisters((uvint32_t *)addr, 1, (uint32_t *)glEp0Buffer);
-                            CyU3PUsbSendEP0Data(4, glEp0Buffer);
-                        }
-                        break;
-
-                    case 0x84:
-                        {
-                            uint8_t major, minor, patch;
-                            if (CyU3PUsbGetBooterVersion(&major, &minor, &patch) == CY_U3P_SUCCESS) {
-                                glEp0Buffer[0] = major;
-                                glEp0Buffer[1] = minor;
-                                glEp0Buffer[2] = patch;
-                                CyU3PUsbSendEP0Data(3, glEp0Buffer);
-                            } else {
-                                CyU3PUsbStall(0, CyTrue, CyFalse);
-                            }
-                        }
-                        break;
-
-                    case 0x90:
-                        /* Request to switch control back to the boot firmware. */
-
-                        /* Complete the control request. */
-                        CyU3PUsbAckSetup();
-                        CyU3PThreadSleep(10);
-
-                        /* Get rid of the DMA channels and EP configuration. */
-                        CyFxAppStop();
-
-                        /* De-initialize the Debug and UART modules. */
-                        CyU3PDebugDeInit();
-                        CyU3PUartDeInit();
-
-                        /* Now jump back to the boot firmware image. */
-                        CyU3PUsbSetBooterSwitch(CyTrue);
-                        CyU3PUsbJumpBackToBooter(0x40078000);
-                        while (1) {
-                            CyU3PThreadSleep (100);
-                        }
-                        break;
-
-                    case 0xB1:
-                        /* Switch to a USB 2.0 Connection. */
-                        CyU3PUsbAckSetup();
-                        CyU3PThreadSleep(1000);
-                        CyFxAppStop();
-                        CyU3PConnectState(CyFalse, CyTrue);
-                        CyU3PThreadSleep(100);
-                        CyU3PConnectState(CyTrue, CyFalse);
-                        break;
-
-                    case 0xB2:
-                        /* Switch to a USB 3.0 connection. */
-                        CyU3PUsbAckSetup ();
-                        CyU3PThreadSleep(100);
-                        CyFxAppStop();
-                        CyU3PConnectState(CyFalse, CyTrue);
-                        CyU3PThreadSleep(10);
-                        CyU3PConnectState(CyTrue, CyTrue);
-                        break;
-
-                    case 0xB3:
-                        /* Stop and restart the USB block. */
-                        CyU3PUsbAckSetup();
-                        CyU3PThreadSleep(100);
-                        CyFxAppDeinit();
-                        CyFxAppInit();
-                        break;
-
-                    case 0xE0:
-                        /* Request to reset the FX3 device. */
-                        CyU3PUsbAckSetup();
-                        CyU3PThreadSleep(2000);
-                        CyU3PConnectState(CyFalse, CyTrue);
-                        CyU3PThreadSleep(1000);
-                        CyU3PDeviceReset(CyFalse);
-                        CyU3PThreadSleep(1000);
-                        break;
-
-                    case 0xE1:
-                        /* Request to place FX3 in standby when VBus is next disconnected. */
-                        StandbyModeEnable = CyTrue;
-                        CyU3PUsbAckSetup();
-                        break;
-
-                    default:        /* Unknown request. Stall EP0. */
-                        CyU3PUsbStall(0, CyTrue, CyFalse);
-                        break;
-                    }
-                } else if((bReqType & CY_U3P_USB_TYPE_MASK) == CY_U3P_USB_CLASS_RQT) {
+                if((bReqType & CY_U3P_USB_TYPE_MASK) == CY_U3P_USB_CLASS_RQT) {
                     if((bRequest == USB_CDC_GET_NTB_PARAMETERS)) {
                         CyU3PDebugPrint(4, (char *)"MAIN: NTB Request\r\n");
                         CyU3PUsbSendEP0Data(sizeof(usb_cdc_ncm_ntb_parameters_t), (uint8_t*)&ntb_parameters);
+                        break;
+                    }
+                    if(bRequest == USB_CDC_GET_NTB_INPUT_SIZE) {
+                        CyU3PDebugPrint(4, (char *)"MAIN: GetNTBInputSize\r\n");
+                        CyU3PUsbSendEP0Data(sizeof(usb_cdc_ncm_ndp_input_size_t), (uint8_t*)&ntb_size);
+                        break;
+                    }
+                    if(bRequest == USB_CDC_SET_NTB_INPUT_SIZE) {
+                        uint16_t receivedBytes;
+                        CyU3PUsbGetEP0Data(sizeof(usb_cdc_ncm_ndp_input_size_t), (uint8_t*)&ntb_size, &receivedBytes);
+                        CyU3PDebugPrint(4, (char *)"MAIN: SetNTBInputSize - %d Bytes - %d\r\n", receivedBytes, ntb_size.dwNtbInMaxSize);
                         break;
                     }
                 } else {

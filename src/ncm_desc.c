@@ -170,3 +170,36 @@ const usb_cdc_ncm_ntb_parameters_t ntb_parameters = {
     .wNdpOutAlignment         = USB_CDC_NCM_NDP_ALIGN_MIN_SIZE,
     .wNtbOutMaxDatagrams      = 6,
 };
+
+usb_cdc_ncm_ndp_input_size_t ntb_size = {
+    .dwNtbInMaxSize = 0
+};
+
+struct ncm_notify_t ncm_notify_connected = {
+    .header = {
+        .bmRequestType_bit = {
+            .recipient = TUSB_REQ_RCPT_INTERFACE,
+            .type = TUSB_REQ_TYPE_CLASS,
+            .direction = TUSB_DIR_IN},
+        .bRequest = CDC_NOTIF_NETWORK_CONNECTION,
+        .wValue = 1 /* Connected */,
+        .wLength = 0,
+    },
+};
+
+struct ncm_notify_t ncm_notify_speed_change = {
+    .header = {
+        .bmRequestType_bit = {
+            .recipient = TUSB_REQ_RCPT_INTERFACE,
+            .type = TUSB_REQ_TYPE_CLASS,
+            .direction = TUSB_DIR_IN},
+        .bRequest = CDC_NOTIF_CONNECTION_SPEED_CHANGE,
+        .wLength = 8,
+    },
+    .downlink = TUD_OPT_HIGH_SPEED ? 480000000 : 12000000,
+    .uplink = TUD_OPT_HIGH_SPEED ? 480000000 : 12000000,
+};
+
+
+usb_cdc_notification_t
+usb_cdc_speed_change_t
