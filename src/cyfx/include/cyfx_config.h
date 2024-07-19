@@ -28,7 +28,7 @@
 #include "cyu3types.h"
 #include "cyu3usbconst.h"
 
-#define CY_FX_EP_NOTIFIER_SOCKET        CY_U3P_UIB_SOCKET_CONS_1    /* Socket 1 is consumer */
+#define CY_FX_EP_NOTIFIER_SOCKET        CY_U3P_UIB_SOCKET_CONS_1    /* Socket 1 is notifier */
 #define CY_FX_EP_PRODUCER_SOCKET        CY_U3P_UIB_SOCKET_PROD_2    /* Socket 2 is producer */
 #define CY_FX_EP_CONSUMER_SOCKET        CY_U3P_UIB_SOCKET_CONS_2    /* Socket 2 is consumer */
 

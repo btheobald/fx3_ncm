@@ -586,6 +586,12 @@ typedef struct {
 	uint32_t	DLBitRRate;	/* contains the downlink bit rate (IN pipe) */
 	uint32_t	ULBitRate;	/* contains the uplink bit rate (OUT pipe) */
 } __attribute__ ((packed)) usb_cdc_speed_change_t;
+
+typedef struct {
+	usb_cdc_notification_t header;
+	usb_cdc_speed_change_t speeds;
+} __attribute__ ((packed)) usb_cdc_notify_speed_t;
+
 /*-------------------------------------------------------------------------*/
 /*
  * Class Specific structures and constants

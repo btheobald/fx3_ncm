@@ -175,31 +175,21 @@ usb_cdc_ncm_ndp_input_size_t ntb_size = {
     .dwNtbInMaxSize = 0
 };
 
-struct ncm_notify_t ncm_notify_connected = {
-    .header = {
-        .bmRequestType_bit = {
-            .recipient = TUSB_REQ_RCPT_INTERFACE,
-            .type = TUSB_REQ_TYPE_CLASS,
-            .direction = TUSB_DIR_IN},
-        .bRequest = CDC_NOTIF_NETWORK_CONNECTION,
-        .wValue = 1 /* Connected */,
-        .wLength = 0,
-    },
+usb_cdc_notification_t notify_connection = {
+    .bmRequestType = USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+    .bNotificationType = USB_CDC_NOTIFY_NETWORK_CONNECTION,
+    .wValue = 1,
+    .wLength = 0
 };
 
-struct ncm_notify_t ncm_notify_speed_change = {
+usb_cdc_notify_speed_t notify_speed = {
     .header = {
-        .bmRequestType_bit = {
-            .recipient = TUSB_REQ_RCPT_INTERFACE,
-            .type = TUSB_REQ_TYPE_CLASS,
-            .direction = TUSB_DIR_IN},
-        .bRequest = CDC_NOTIF_CONNECTION_SPEED_CHANGE,
-        .wLength = 8,
+        .bmRequestType = USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+        .bNotificationType = USB_CDC_NOTIFY_SPEED_CHANGE,
+        .wLength = 8
     },
-    .downlink = TUD_OPT_HIGH_SPEED ? 480000000 : 12000000,
-    .uplink = TUD_OPT_HIGH_SPEED ? 480000000 : 12000000,
-};
-
-
-usb_cdc_notification_t
-usb_cdc_speed_change_t
+    .speeds = {
+        .DLBitRRate = 480000000,
+        .ULBitRate = 480000000
+    }
+}

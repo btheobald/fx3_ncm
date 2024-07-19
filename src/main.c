@@ -11,6 +11,7 @@
 #include "cyu3utils.h"
 
 CyU3PThread     appThread;    // Application thread structure
+CyU3PDmaChannel glChHandleNotifier;      // DMA MANUAL_IN channel handle.
 CyU3PDmaChannel glChHandleBulkSink;      // DMA MANUAL_IN channel handle.
 CyU3PDmaChannel glChHandleBulkSrc;       // DMA MANUAL_OUT channel handle.
 
@@ -261,6 +262,13 @@ void CyFxAppStart (void) {
     epCfg.streams = 0;
     epCfg.pcktSize = size;
 
+    /* Notifier endpoint configuration */
+    apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_NOTIFIER, &epCfg);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
+        CyFxAppErrorHandler (apiRetStatus);
+    }
+
     /* Producer endpoint configuration */
     apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_PRODUCER, &epCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
@@ -276,22 +284,14 @@ void CyFxAppStart (void) {
     }
 
     /* Flush the endpoint memory */
+    CyU3PUsbFlushEp(CY_FX_EP_NOTIFIER);
     CyU3PUsbFlushEp(CY_FX_EP_PRODUCER);
     CyU3PUsbFlushEp(CY_FX_EP_CONSUMER);
 
     /* Create a DMA MANUAL_IN channel for the producer socket. */
     CyU3PMemSet ((uint8_t *)&dmaCfg, 0, sizeof (dmaCfg));
-    /* The buffer size will be same as packet size for the
-     * full speed, high speed and super speed non-burst modes.
-     * For super speed burst mode of operation, the buffers will be
-     * 1024 * burst length so that a full burst can be completed.
-     * This will mean that a buffer will be available only after it
-     * has been filled or when a short packet is received. */
-    dmaCfg.size  = (size * CY_FX_EP_BURST_LENGTH);
-    /* Multiply the buffer size with the multiplier
-     * for performance improvement. */
-    dmaCfg.size *= CY_FX_DMA_SIZE_MULTIPLIER;
-    dmaCfg.count = CY_FX_BULKSRCSINK_DMA_BUF_COUNT;
+    dmaCfg.size = sizeof(usb_cdc_notification_t);
+    dmaCfg.count = 1;
     dmaCfg.prodSckId = CY_FX_EP_PRODUCER_SOCKET;
     dmaCfg.consSckId = CY_U3P_CPU_SOCKET_CONS;
     dmaCfg.dmaMode = CY_U3P_DMA_MODE_BYTE;
@@ -302,30 +302,14 @@ void CyFxAppStart (void) {
     dmaCfg.consHeader = 0;
     dmaCfg.prodAvailCount = 0;
 
-    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleBulkSink, CY_U3P_DMA_TYPE_MANUAL_IN, &dmaCfg);
-    if (apiRetStatus != CY_U3P_SUCCESS) {
-        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCreate failed, Error code = %d\n", apiRetStatus);
-        CyFxAppErrorHandler(apiRetStatus);
-    }
-
-    /* Create a DMA MANUAL_OUT channel for the consumer socket. */
-    dmaCfg.notification = CY_U3P_DMA_CB_CONS_EVENT;
-    dmaCfg.prodSckId = CY_U3P_CPU_SOCKET_PROD;
-    dmaCfg.consSckId = CY_FX_EP_CONSUMER_SOCKET;
-    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleBulkSrc, CY_U3P_DMA_TYPE_MANUAL_OUT, &dmaCfg);
+    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleNotifier, CY_U3P_DMA_TYPE_MANUAL_IN, &dmaCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCreate failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler(apiRetStatus);
     }
 
     /* Set DMA Channel transfer size */
-    apiRetStatus = CyU3PDmaChannelSetXfer (&glChHandleBulkSink, CY_FX_BULKSRCSINK_DMA_TX_SIZE);
-    if (apiRetStatus != CY_U3P_SUCCESS) {
-        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelSetXfer failed, Error code = %d\n", apiRetStatus);
-        CyFxAppErrorHandler(apiRetStatus);
-    }
-
-    apiRetStatus = CyU3PDmaChannelSetXfer (&glChHandleBulkSrc, CY_FX_BULKSRCSINK_DMA_TX_SIZE);
+    apiRetStatus = CyU3PDmaChannelSetXfer (&glChHandleNotifier, CY_FX_BULKSRCSINK_DMA_TX_SIZE);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelSetXfer failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler(apiRetStatus);
@@ -349,37 +333,42 @@ void CyFxAppStop(void) {
     glIsApplnActive = CyFalse;
 
     /* Destroy the channels */
-    CyU3PDmaChannelDestroy (&glChHandleBulkSink);
-    CyU3PDmaChannelDestroy (&glChHandleBulkSrc);
+    CyU3PDmaChannelDestroy (&glChHandleNotifier);
+    //CyU3PDmaChannelDestroy (&glChHandleBulkSink);
+    //CyU3PDmaChannelDestroy (&glChHandleBulkSrc);
 
     /* Flush the endpoint memory */
-    CyU3PUsbFlushEp(CY_FX_EP_PRODUCER);
-    CyU3PUsbFlushEp(CY_FX_EP_CONSUMER);
+    //CyU3PUsbFlushEp(CY_FX_EP_NOTIFIER);
+    //CyU3PUsbFlushEp(CY_FX_EP_PRODUCER);
+    //CyU3PUsbFlushEp(CY_FX_EP_CONSUMER);
 
     /* Disable endpoints. */
     CyU3PMemSet ((uint8_t *)&epCfg, 0, sizeof (epCfg));
     epCfg.enable = CyFalse;
 
-    /* Producer endpoint configuration. */
-    apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_PRODUCER, &epCfg);
+    apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_NOTIFIER, &epCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler (apiRetStatus);
     }
 
-    /* Consumer endpoint configuration. */
-    apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_CONSUMER, &epCfg);
+    /*apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_PRODUCER, &epCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler (apiRetStatus);
     }
+
+    apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_CONSUMER, &epCfg);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
+        CyFxAppErrorHandler (apiRetStatus);
+    }*/
 }
 
 /* Callback to handle the USB setup requests. */
 CyBool_t CyFxAppUSBSetupCB(uint32_t setupdat0, uint32_t setupdat1) {
     /* Fast enumeration is used. Only requests addressed to the interface, class,
-     * vendor and unknown control requests are received by this function.
-     * This application does not support any class or vendor requests. */
+     * vendor and unknown control requests are received by this function. */
 
     uint8_t  bRequest, bReqType;
     uint8_t  bType, bTarget;
@@ -768,6 +757,10 @@ void appThread_Entry(uint32_t input) {
                 } else {
                     CyU3PUsbStall(0, CyTrue, CyFalse);
                 }
+            }
+
+            if( CyU3PGetTime() > 5000 ) {
+                
             }
         }
 

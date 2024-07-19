@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include "desc_types.h"
 
-#define CY_FX_EP_NOTIFIER               0x81
+#define CY_FX_EP_NOTIFIER               0x81    /* EP 1 IN */
 #define CY_FX_EP_PRODUCER               0x02    /* EP 2 OUT */
 #define CY_FX_EP_CONSUMER               0x82    /* EP 2 IN */
 

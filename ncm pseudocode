@@ -1,0 +1,264 @@
+Data Structures:
+    -   ncm_interface <- state and functions
+    -   ntb_parameters
+    -   ncm_notify_connected
+    -   ncm_notify_speed_change
+
+Functions:
+    ----------------------
+    | Transmit Functions |
+    ----------------------
+
+    Void - Transmit Notification - ForceNext
+
+        if not ForceNext and Notification Transmit Running 
+            return
+        else
+            switch state
+            SpeedChange:
+                Transfer on Interrupt EP (ncm_notify_speed_change)
+                Notification Transmit Running (true)
+                State = (Connected Notification)
+            Connected:
+                Transfer on Interrupt EP (ncm_notify_speed_change)
+                Notification Transmit Running (true)
+                State = (Notification Finished)
+            Finished:
+                Notification Transmit Running (false) (?)
+
+    -----------------------------------------------------------
+
+    Void - Transmit Put NTB Into Free List - NTB* FreeNTB
+
+        if FreeNTB Null
+            return
+        find Free NTB Buffer in Free List (FreeNTBList[idx] == NULL)
+            FreeNTBList[idx] = FreeNTB
+
+    -----------------------------------------------------------
+
+    NTB* - Transmit Get NTB From Free List
+
+        Find Populated Free NTB (FreeNTBList[idx] != NULL)
+            return FreeNTBList[idx] and FreeNTBList[idx] = NULL
+        if None Found:
+        return NULL
+
+    -----------------------------------------------------------
+
+    Void Transmit Put NTB Into Ready List - NTB* ReadyNTB
+
+        Find Ready NTB Buffer in Ready List (ReadyNTBList[idx] == NULL)
+            ReadyNTBList[idx] = ReadyNTB
+
+    -----------------------------------------------------------
+
+    NTB* - Transmit Get NTB From Ready List
+
+        Find Next Ready NTB (ReadyNTBList[idx] != NULL)
+            Track Front of NTB Circular Buffer
+            return ReadyNTBList[idx] and ReadyNTBList[idx] = NULL
+        if None Found:
+        return NULL 
+
+    -----------------------------------------------------------
+
+    Bool - Transmit Insert ZLP - TransferBytes
+
+        if TransferBytes == 0 or TransferBytes % EP_SIZE != 0
+            return false
+        EndpointTransfer( DATA_EP_IN, NULL, 0 )
+        return true
+
+    -----------------------------------------------------------
+
+    Bool - Transmit Start If Possible
+
+        if transmit_ntb != NULL
+            return false
+        if itf_alt != 1
+            return false
+        if EndpointBusy( DATA_EP_IN )
+            return false
+        TransmitNTB = Transmit Get NTB From Ready List ()
+        if TransmitNTB == NULL & (TransmitGlueNTB == NULL || TransmitGlueNTBDatagramIndex == 0)
+            return false
+        if TransmitNTB == NULL
+            TransmitNTB = TransmitGlueNTB
+            TransmitGlueNTB = False
+        EndpointTransfer( DATA_EP_IN, TransmitNTB->Data, TransmitNTB->Length )            
+
+    -----------------------------------------------------------
+
+    Bool - Transmit Requested Datagram Fits into current NTB - DatagramSize
+
+        if TransmitGlueNTB == NULL
+            return false
+        if TransmitGlueNTBDatagramIndex >= NTB_MAX_DATAGRAMS
+            return false
+        if (TransmitGlueNTB->Length + DatagramSize + ALIGNMENT_OFFSET(DatagramSize)) > NTB_MAX_SIZE
+            return false
+        return true
+
+    -----------------------------------------------------------
+
+    Bool - Transmit Setup Next Glue NTB
+
+        if TransmitGlueNTB != NULL
+            Transmit Put NTB Into Ready List ( TransmitGlueNTB )
+        TransmitGlueNTB = Transmit Get NTB From Free List ()
+        if TransmitGlueNTB == NULL
+            return false
+        TransmitGlueNTBDatagramIndex = 0
+        LocalTransmitNTB = TransmitGlueNTB
+        Populate LocalTransmitNTB 
+        return true
+
+    -----------------------------------------------------------
+
+    ----------------------
+    | Receive Functions |
+    ----------------------
+
+    -----------------------------------------------------------
+
+    NTB* - Receive Get Free NTB
+
+        Find Populated Free NTB (FreeNTBList[idx] != NULL)
+            return FreeNTBList[idx] and FreeNTBList[idx] = NULL
+        if None Found:
+        return NULL
+
+    -----------------------------------------------------------
+
+    NTB* - Receive Get Next Ready NTB
+
+        Find Next Ready NTB (ReadyNTBList[idx] != NULL)
+            Track Front of NTB Circular Buffer
+            return ReadyNTBList[idx] and ReadyNTBList[idx] = NULL
+        if None Found:
+        return NULL 
+
+    -----------------------------------------------------------
+
+    Void - Receive Put NTB into Free List - NTB* FreeNTB
+
+        Find Free NTB Buffer in Free List (FreeNTBList[idx] == NULL)
+            FreeNTBList[idx] = FreeNTB
+
+    -----------------------------------------------------------
+
+    Void - Receive Put NTB into Ready List - NTB* ReadyNTB
+
+        Find Free NTB Buffer in Ready List (ReadyNTB[idx] == NULL)
+            ReadyNTBList[idx] = ReadyNTB
+
+    -----------------------------------------------------------
+
+    Bool - Receive Start If Possible
+
+        if receive_ntb != NULL
+            return false
+        if itf_alt != 1
+            return false
+        if EndpointBusy( DATA_EP_OUT )
+            return false
+        ReceiveNTB = Receive Get Free NTB ()
+        if ReceiveNTB == NULL
+            return false
+        bool r = EndpointTransfer( DATA_EP_OUT, ReceiveNTB->Data, NTB_MAX_SIZE )
+        if !r
+            Receive Put NTB into Free List ( ReceiveNTB )
+            ReceiveNTB = NULL
+            return false
+        return true
+        
+    -----------------------------------------------------------
+
+    Bool - Receive Validate Datagram - NTB* NTB, Length
+        
+        LocalNTH16 = NTB->NTH
+            wHeaderLength != sizeof(nth16_t)
+            Signature != NTH16_SIGNATURE
+            Length < sizeof(nth16_t) + sizeof(ndp16_t) + 2 * sizeof(ndp16_datagram_t)
+            wBlockLength > Length
+            wBlockLength > NTB_MAX_SIZE
+            wNdpIndex < sizeof(nth16_t) || nth16->wNdpIndex > len - sizeof(nth16_t) + 2 * sizeof(ndp16_datagram_t)
+            wLength < sizeof(ndp16_t)
+                return false
+        LocalNDP16 = LocalNTB->Data + LocalNTH16->wNdpIndex
+            wLength < sizeof(ndp16_t) + 2 * sizeof(ndp16_datagram_t)
+            dwSignature != NDP16_SIGNATURE_NCM0 && dwSignature != NDP16_SIGNATURE_NCM1
+            wNextNdpIndex != 0
+                return false
+        LocalNDP16Datagram = LocalNTB->Data + LocalNTH16->wNdpIndex + sizeof(ndp16_t)
+            MaxIndex = LocalNDP16->wLength - sizeof(ndp16_t) / sizeof(ndp16_t_datagram_t);
+            
+
+    -----------------------------------------------------------
+
+    Void - Transfer Datagram to Glue
+
+
+
+    -----------------------------------------------------------
+
+    ---------------------
+    | Network Functions |
+    ---------------------
+
+    -----------------------------------------------------------
+
+    Bool - Network Can Transmit - Length
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Transmit - Datagram, Arg
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Receive Renew
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Init
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network DeInit
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Reset
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Open
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Transfer Callback
+
+
+
+    -----------------------------------------------------------
+
+    Void - Network Control Transfer Callback
+
+
+
+    -----------------------------------------------------------
