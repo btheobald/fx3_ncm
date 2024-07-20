@@ -1,6 +1,6 @@
 fx3_add_target(Fx3CmakeSample
     main.c
-    ncm_desc.c
+    usb_desc.c
     cyfx/cyfx_tx.cpp
     cyfx/cyfx_gcc_startup.S
     cyfx/cyfxcpp_syscall.cpp

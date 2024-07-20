@@ -1,4 +1,4 @@
-#include "ncm_desc.h"
+#include "usb_desc.h"
 
 #include "cyu3system.h"
 #include "cyu3os.h"

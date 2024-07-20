@@ -1,4 +1,4 @@
-#include "ncm_desc.h"
+#include "usb_desc.h" 
 
 #define NCM_STATUS_BYTECOUNT		16	/* 8 byte header + data */
 
@@ -32,7 +32,7 @@ usb_desc_t usb_config_desc __attribute__ ((aligned (32))) = {
     },
     .ncm_iad_desc = {
         .bLength            =	sizeof(usb_interface_assoc_descriptor_t),
-        .bDescriptorType    =	USB_DT_INTERFACE_ASSOCIATION,
+        .bDescriptorType    =	USB_DT_INTERFACE_ASSOC,
         .bFirstInterface    =	0,
         .bInterfaceCount    =	2,	/* control + data */
         .bFunctionClass     =	USB_CLASS_COMM,
@@ -81,7 +81,7 @@ usb_desc_t usb_config_desc __attribute__ ((aligned (32))) = {
         //.bmNetworkCapabilities = (USB_CDC_NCM_NCAP_ETH_FILTER | USB_CDC_NCM_NCAP_CRC_MODE),
     },
     .ncm_notify_ep_desc = {
-        .bLength            =	USB_DT_ENDPOINT_SIZE,
+        .bLength            =	sizeof(usb_endpoint_descriptor_t),
         .bDescriptorType    =	USB_DT_ENDPOINT,
         .bEndpointAddress   =	CY_FX_EP_NOTIFIER,
         .bmAttributes       =	USB_ENDPOINT_XFER_INT,
@@ -111,14 +111,14 @@ usb_desc_t usb_config_desc __attribute__ ((aligned (32))) = {
         .iInterface         =   STR_ID_INTF,
     },
     .ncm_in_ep_desc = {
-        .bLength            =	USB_DT_ENDPOINT_SIZE,
+        .bLength            =	sizeof(usb_endpoint_descriptor_t),
         .bDescriptorType    =	USB_DT_ENDPOINT,
         .bEndpointAddress   =	CY_FX_EP_CONSUMER,
         .bmAttributes       =	USB_ENDPOINT_XFER_BULK,
         .wMaxPacketSize     =	512,
     },
     .ncm_out_ep_desc = {
-        .bLength            =	USB_DT_ENDPOINT_SIZE,
+        .bLength            =	sizeof(usb_endpoint_descriptor_t),
         .bDescriptorType    =	USB_DT_ENDPOINT,
         .bEndpointAddress   =	CY_FX_EP_PRODUCER,
         .bmAttributes       =	USB_ENDPOINT_XFER_BULK,
@@ -155,41 +155,3 @@ const usb_string_descriptor_t str_desc_serial = {
     .bDescriptorType = USB_DT_STRING,
     .bString = STR_MACA
 };
-
-const usb_cdc_ncm_ntb_parameters_t ntb_parameters = {
-    .wLength                  = sizeof(usb_cdc_ncm_ntb_parameters_t),
-    .bmNtbFormatsSupported    = 0x01,// 16-bit NTB supported
-    .dwNtbInMaxSize           = USB_CDC_NCM_NTB_MAX_IN_SIZE,
-    .wNdpInDivisor            = 1,
-    .wNdpInPayloadRemainder   = 0,
-    .wNdpInAlignment          = USB_CDC_NCM_NDP_ALIGN_MIN_SIZE,
-    .wPadding1                = 0,
-    .dwNtbOutMaxSize          = USB_CDC_NCM_NTB_MAX_OUT_SIZE,
-    .wNdpOutDivisor           = 1,
-    .wNdpOutPayloadRemainder  = 0,
-    .wNdpOutAlignment         = USB_CDC_NCM_NDP_ALIGN_MIN_SIZE,
-    .wNtbOutMaxDatagrams      = 6,
-};
-
-usb_cdc_ncm_ndp_input_size_t ntb_size = {
-    .dwNtbInMaxSize = 0
-};
-
-usb_cdc_notification_t notify_connection = {
-    .bmRequestType = USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-    .bNotificationType = USB_CDC_NOTIFY_NETWORK_CONNECTION,
-    .wValue = 1,
-    .wLength = 0
-};
-
-usb_cdc_notify_speed_t notify_speed = {
-    .header = {
-        .bmRequestType = USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-        .bNotificationType = USB_CDC_NOTIFY_SPEED_CHANGE,
-        .wLength = 8
-    },
-    .speeds = {
-        .DLBitRRate = 480000000,
-        .ULBitRate = 480000000
-    }
-}
