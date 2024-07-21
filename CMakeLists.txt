@@ -38,6 +38,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions -fno-rtti -fno-unwind-ta
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_FLAGS} -Wwrite-strings -std=c11")
 
 add_subdirectory(src)
+add_subdirectory(ncm)
                                                 
 add_custom_target(flash_i2c ./build/download_fx3 -t I2C -i ${CMAKE_SOURCE_DIR}/build/${CMAKE_PROJECT_NAME}.img WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/utl/flash DEPENDS Fx3CmakeSample USES_TERMINAL)
 add_custom_target(flash_ram ./build/download_fx3 -t RAM -i ${CMAKE_SOURCE_DIR}/build/${CMAKE_PROJECT_NAME}.img WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/utl/flash DEPENDS Fx3CmakeSample USES_TERMINAL)

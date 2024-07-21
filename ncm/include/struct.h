@@ -1,5 +1,4 @@
 #pragma once
-
 #include <stdint.h>
 #include <stdbool.h>
 #include "ncm.h"
@@ -19,7 +18,7 @@ typedef enum {
 } notifiy_state_t;
 
 typedef struct {
-  bool interface_active;                // Traffic allowed
+  uint8_t interface_active;                // Traffic allowed
 
   // OUT
   ntb_t rx_ntb[NCM_NTB_N];              // Actual NTBs

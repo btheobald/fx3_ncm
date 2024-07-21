@@ -16,6 +16,18 @@ typedef struct {
 } __attribute__ ((packed)) usb_string_descriptor_t;
 
 typedef struct {
+  struct {
+    uint8_t recipient : 5;
+	  uint8_t type : 2;
+    uint8_t direction : 1;
+  } __attribute__ ((packed)) bmRequestType;
+  uint8_t  bRequest;
+  uint16_t wValue;
+  uint16_t wIndex;
+  uint16_t wLength;
+} __attribute__ ((packed)) usb_control_request_t;
+
+typedef struct {
 	uint8_t  bLength;
 	uint8_t  bDescriptorType;
 	uint16_t bcdUSB;

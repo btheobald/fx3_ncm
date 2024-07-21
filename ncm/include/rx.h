@@ -1,3 +1,4 @@
+#pragma once
 #include "ncm.h"
 #include "struct.h"
 #include <stdlib.h>

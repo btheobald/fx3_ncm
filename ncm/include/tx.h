@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 
 void tx_notification ( bool force_next );
 bool tx_insert_zlp ( uint16_t size );

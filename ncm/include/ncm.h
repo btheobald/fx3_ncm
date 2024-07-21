@@ -1,9 +1,10 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 
 #define NCM_EP_SIZE 512
 
-#define NCM_EP_INTERRUPT  0x81
+#define NCM_EP_NOTIFY     0x81
 #define NCM_EP_DATA_OUT   0x02
 #define NCM_EP_DATA_IN    0x82
 
@@ -100,11 +101,11 @@ typedef union {
 } __attribute__ ((packed)) ntb_t;
 
 typedef struct {
-	__attribute__ ((packed)) struct {
-    uint8_t transfer_direction : 1;
+	struct {
+    uint8_t recipient : 5;
 	  uint8_t type : 2;
-	  uint8_t recipient : 5;
-  } bmRequestType;
+    uint8_t direction : 1;
+  } __attribute__ ((packed)) bmRequestType;
 	uint8_t	  bNotificationType;
 	uint16_t	wValue;
 	uint16_t	wIndex;
