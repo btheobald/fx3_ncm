@@ -1,12 +1,15 @@
 #pragma once
 #include <stdint.h>
 
-#define NCM_OUT_NTB_MAX_SIZE 3200
-#define NCM_IN_NTB_MAX_SIZE 3200
-#define NCM_OUT_NTB_N 2
-#define NCM_IN_NTB_N 2
-#define NCM_IN_MAX_DATAGRAMS_PER_NTB 8
-#define NCM_OUT_MAX_DATAGRAMS_PER_NTB 8
+#define NCM_EP_SIZE 512
+
+#define NCM_EP_INTERRUPT  0x81
+#define NCM_EP_DATA_OUT   0x02
+#define NCM_EP_DATA_IN    0x82
+
+#define NCM_NTB_MAX_SIZE 3200
+#define NCM_NTB_N 2
+#define NCM_MAX_DATAGRAMS_PER_NTB 8
 #define NCM_NDP_ALIGN_MIN_SIZE 4
 
 #define NTH16_SIGNATURE 0x484D434E
@@ -83,18 +86,18 @@ typedef union {
   struct {
     nth16_t nth;
     ndp16_t ndp;
-    ndp16_datagram_t ndp_datagram[NCM_IN_MAX_DATAGRAMS_PER_NTB + 1];
+    ndp16_datagram_t ndp_datagram[NCM_MAX_DATAGRAMS_PER_NTB + 1];
   };
-  uint8_t data[NCM_IN_NTB_MAX_SIZE];
-} __attribute__ ((packed)) tx_ntb_t;
+  uint8_t data[NCM_NTB_MAX_SIZE];
+} __attribute__ ((packed)) ntb_def_t;
 
 typedef union {
   struct {
     nth16_t nth;
     // Received Data may be algined differently
   };
-  uint8_t data[NCM_OUT_NTB_MAX_SIZE];
-} __attribute__ ((packed)) rx_ntb_t;
+  uint8_t data[NCM_NTB_MAX_SIZE];
+} __attribute__ ((packed)) ntb_t;
 
 typedef struct {
 	__attribute__ ((packed)) struct {

@@ -175,7 +175,7 @@
         if ReceiveGlueNTB != NULL
             ReceiveGlueNTB = Receive Get Next Ready NTB ()
             ReceiveGlueNTBDatagramIndex = 0
-        if TransmitGlueNTB != NULL
+        if ReceiveGlueNTB != NULL
             LocalNDP16Datagram* = ReceiveGlueNTB->Data + ReceiveGlueNTB->NTH->NDPIndex + sizeof(ndp16_t)
             LocalDatagramIndex = LocalNDP16Datagram[ ReceiveGlueNTBDatagramIndex ]->DatagramIndex
             LocalDatagramLength = LocalNDP16Datagram[ ReceiveGlueNTBDatagramIndex ]->DatagramLength
