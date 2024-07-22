@@ -167,9 +167,9 @@ set(CMAKE_CXX_FLAGS         ${CMAKE_FLAGS_COMMON})
 set(CMAKE_CXX_FLAGS_DEBUG   ${CMAKE_FLAGS_COMMON_DEBUG})
 set(CMAKE_CXX_FLAGS_RELEASE ${CMAKE_FLAGS_COMMON_RELEASE})
 
-# -Map $(MODULE).map
+# -Map $(MODULE).map //-nostdlib
 set(CMAKE_EXE_LINKER_FLAGS
-  "-T \"${CMAKE_SOURCE_DIR}/utl/linker/fx3cpp.ld\" -d --gc-sections --no-wchar-size-warning -nostdlib --entry CyU3PFirmwareEntry")
+  "-T \"${CMAKE_SOURCE_DIR}/utl/linker/fx3.ld\" -d --gc-sections --no-wchar-size-warning --entry CyU3PFirmwareEntry")
 
 # Set default build type
 if (NOT CMAKE_BUILD_TYPE)

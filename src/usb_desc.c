@@ -2,7 +2,7 @@
 
 #define NCM_STATUS_BYTECOUNT		16	/* 8 byte header + data */
 
-usb_device_descriptor_t const usb_device_desc __attribute__ ((aligned (32))) = {
+usb_device_descriptor_t const usb_device_desc __attribute__ ((aligned (4))) = {
 	.bLength            =   sizeof(usb_device_descriptor_t),
 	.bDescriptorType    =   USB_DT_DEVICE,
 	.bcdUSB             =   0x200,
@@ -19,7 +19,7 @@ usb_device_descriptor_t const usb_device_desc __attribute__ ((aligned (32))) = {
 	.bNumConfigurations =   1
 };
 
-usb_desc_t usb_config_desc __attribute__ ((aligned (32))) = {
+usb_desc_t usb_config_desc __attribute__ ((aligned (4))) = {
     .config_desc = {
         .bLength            =   sizeof(usb_config_descriptor_t),        
         .bDescriptorType    =   USB_DT_CONFIG,    
@@ -60,7 +60,7 @@ usb_desc_t usb_config_desc __attribute__ ((aligned (32))) = {
         .bLength            =	sizeof(usb_cdc_union_desc_t),
         .bDescriptorType    =	USB_DT_CS_INTERFACE,
         .bDescriptorSubType =	USB_CDC_UNION_TYPE,
-        .bMasterInterface0  =	0, // Control/* .iInterface = DYNAMIC */ Interface
+        .bMasterInterface0  =	0, // Control
         .bSlaveInterface0   =	1  // Data Interface
     },
     .ecm_desc = {

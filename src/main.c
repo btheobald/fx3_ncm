@@ -1,4 +1,8 @@
 #include "usb_desc.h"
+#include "desc_types.h"
+#include "ncm.h"
+#include "net.h"
+#include "struct.h"
 
 #include "cyu3system.h"
 #include "cyu3os.h"
@@ -11,9 +15,14 @@
 #include "cyu3utils.h"
 
 CyU3PThread     appThread;    // Application thread structure
+CyU3PThread     lwipThread;    // Application thread structure
 CyU3PDmaChannel glChHandleNotifier;      // DMA MANUAL_IN channel handle.
 CyU3PDmaChannel glChHandleBulkSink;      // DMA MANUAL_IN channel handle.
 CyU3PDmaChannel glChHandleBulkSrc;       // DMA MANUAL_OUT channel handle.
+
+CyU3PDmaBuffer_t notifyBuf;
+CyU3PDmaBuffer_t outBuf;
+CyU3PDmaBuffer_t inBuf;
 
 CyBool_t glIsApplnActive = CyFalse;      // Whether the source sink application is active or not.
 uint32_t glDMARxCount = 0;               // Counter to track the number of buffers received.
@@ -45,12 +54,102 @@ CyU3PTimer glLpmTimer;
 #define FX3_GPIO_TO_LOFLAG(gpio)        (1 << (gpio))
 #define FX3_GPIO_TO_HIFLAG(gpio)        (1 << ((gpio) - 32))
 
+#include <lwip/ip.h>
+#include <lwip/init.h>
+#include <lwip/netif.h>
+#include <lwip/etharp.h>
+#include <netif/ethernet.h>
+#include <lwip/apps/lwiperf.h>
+
+#define INIT_IP4(a, b, c, d) { PP_HTONL(LWIP_MAKEU32(a, b, c, d)) }
+
+/* lwip context */
+static struct netif netif_data;
+/* shared between net_rx_cb() and service_traffic() */
+static struct pbuf *received_frame;
+
+static const ip4_addr_t ipaddr = INIT_IP4(192, 168, 7, 1);
+static const ip4_addr_t netmask = INIT_IP4(255, 255, 255, 0);
+static const ip4_addr_t gateway = INIT_IP4(0, 0, 0, 0);
+
+static err_t link_output_app( struct netif *netif, struct pbuf *p ) {
+    while(1) {
+        if (!glIsApplnActive) {
+            return ERR_USE; // Not Ready
+        }
+        if (net_can_tx(p->tot_len)) {
+            net_tx(p, 0);
+            return ERR_OK;
+        }
+    }
+}
+
+static err_t ip4_output_app(struct netif *netif, struct pbuf *p, const ip4_addr_t *addr) {
+    return etharp_output(netif, p, addr);
+}
+
+static err_t netif_init_cb(struct netif *netif) {
+    netif->mtu = 1514;
+    netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP | NETIF_FLAG_UP;
+    netif->state = NULL;
+    netif->name[0] = 'E';
+    netif->name[1] = 'X';
+    netif->linkoutput = link_output_app;
+    netif->output = ip4_output_app;
+    return ERR_OK;
+}
+
 // Application Error Handler
 void CyFxAppErrorHandler(CyU3PReturnStatus_t apiRetStatus) {
     (void)(apiRetStatus);
     while(1) {
         CyU3PThreadSleep (100);
     }
+}
+
+extern uint16_t net_tx_cb( void * destination, void * datagram, uint16_t arg ) {
+    (void) arg; /* unused for this example */
+    struct pbuf *p = (struct pbuf *) datagram;
+    return pbuf_copy_partial(p, destination, p->tot_len, 0);
+}
+
+extern uint16_t net_rx_cb( void * datagram, uint16_t size ) {
+    if (received_frame) return false;
+    if (size) {
+        struct pbuf *p = pbuf_alloc(PBUF_RAW, size, PBUF_POOL);
+        if (p) {
+            /* pbuf_alloc() has already initialized struct; all we need to do is copy the data */
+            memcpy(p->payload, datagram, size);
+            /* store away the pointer for service_traffic() to later handle */
+            received_frame = p;
+        }
+    }
+    return true;
+}
+
+uint8_t tud_network_mac_address[6] = {0x2E, 0xF5, 0xF3, 0x68, 0xDC, 0xE6};
+
+static void init_lwip(void) {
+  struct netif *netif = &netif_data;
+
+  lwip_init();
+
+  netif->hwaddr_len = sizeof(tud_network_mac_address);
+  memcpy(netif->hwaddr, tud_network_mac_address, sizeof(tud_network_mac_address));
+  netif->hwaddr[5] ^= 0x01;
+
+  netif = netif_add(netif, &ipaddr, &netmask, &gateway, NULL, netif_init_cb, ip_input);
+  netif_set_default(netif);
+}
+
+static void service_traffic(void) {
+  /* handle any packet received by tud_network_recv_cb() */
+  if (received_frame) {
+    ethernet_input(received_frame, &netif_data);
+    pbuf_free(received_frame);
+    received_frame = NULL;
+    net_rx_renew();
+  }
 }
 
 // This function initializes the debug module / UART
@@ -149,9 +248,7 @@ void CyFxDmaCallback(CyU3PDmaChannel *chHandle, CyU3PDmaCbType_t type, CyU3PDmaC
     CyU3PTimerStart(&glLpmTimer);
 
     if (type == CY_U3P_DMA_CB_PROD_EVENT) {
-        /* This is a produce event notification to the CPU. This notification is 
-         * received upon reception of every buffer. We have to discard the buffer
-         * as soon as it is received to implement the data sink. */
+        CyU3PDebugPrint (4, (char *)"PROD_DMA_CB\n\r");
         status = CyU3PDmaChannelDiscardBuffer (chHandle);
         if (status != CY_U3P_SUCCESS) {
             CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelDiscardBuffer failed, Error code = %d\n", status);
@@ -161,11 +258,7 @@ void CyFxDmaCallback(CyU3PDmaChannel *chHandle, CyU3PDmaCbType_t type, CyU3PDmaC
         glDMARxCount++;
     }
     if (type == CY_U3P_DMA_CB_CONS_EVENT) {
-        /* This is a consume event notification to the CPU. This notification is 
-         * received when a buffer is sent out from the device. We have to commit
-         * a new buffer as soon as a buffer is available to implement the data
-         * source. The data is preloaded into the buffer at that start. So just
-         * commit the buffer. */
+        CyU3PDebugPrint (4, (char *)"CONS_DMA_CB\n\r");
         status = CyU3PDmaChannelGetBuffer (chHandle, &buf_p, CYU3P_NO_WAIT);
         if (status == CY_U3P_SUCCESS) {
             /* Commit the full buffer with default status. */
@@ -180,31 +273,6 @@ void CyFxDmaCallback(CyU3PDmaChannel *chHandle, CyU3PDmaCbType_t type, CyU3PDmaC
 
         /* Increment the counter. */
         glDMATxCount++;
-    }
-}
-
-/*
- * Fill all DMA buffers on the IN endpoint with data. This gets data moving after an endpoint reset.
- */
-static void CyFxFillInBuffers(void) {
-    CyU3PReturnStatus_t stat;
-    CyU3PDmaBuffer_t    buf_p;
-    uint16_t            index = 0;
-
-    /* Now preload all buffers in the MANUAL_OUT pipe with the required data. */
-    for (index = 0; index < CY_FX_BULKSRCSINK_DMA_BUF_COUNT; index++) {
-        stat = CyU3PDmaChannelGetBuffer (&glChHandleBulkSrc, &buf_p, CYU3P_NO_WAIT);
-        if (stat != CY_U3P_SUCCESS) {
-            CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelGetBuffer failed, Error code = %d\n", stat);
-            CyFxAppErrorHandler(stat);
-        }
-
-        CyU3PMemSet (buf_p.buffer, CY_FX_BULKSRCSINK_PATTERN, buf_p.size);
-        stat = CyU3PDmaChannelCommitBuffer (&glChHandleBulkSrc, buf_p.size, 0);
-        if (stat != CY_U3P_SUCCESS) {
-            CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCommitBuffer failed, Error code = %d\n", stat);
-            CyFxAppErrorHandler(stat);
-        }
     }
 }
 
@@ -257,10 +325,10 @@ void CyFxAppStart (void) {
 
     CyU3PMemSet ((uint8_t *)&epCfg, 0, sizeof (epCfg));
     epCfg.enable = CyTrue;
-    epCfg.epType = CY_U3P_USB_EP_BULK;
-    epCfg.burstLen = (usbSpeed == CY_U3P_SUPER_SPEED) ? (CY_FX_EP_BURST_LENGTH) : 1;
+    epCfg.epType = CY_U3P_USB_EP_INTR;
+    epCfg.burstLen = 1;
     epCfg.streams = 0;
-    epCfg.pcktSize = size;
+    epCfg.pcktSize = 16;
 
     /* Notifier endpoint configuration */
     apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_NOTIFIER, &epCfg);
@@ -269,13 +337,15 @@ void CyFxAppStart (void) {
         CyFxAppErrorHandler (apiRetStatus);
     }
 
+    // Datapath is Bulk EP
+    epCfg.epType = CY_U3P_USB_EP_BULK;
+
     /* Producer endpoint configuration */
     apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_PRODUCER, &epCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler (apiRetStatus);
     }
-
     /* Consumer endpoint configuration */
     apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_CONSUMER, &epCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
@@ -290,34 +360,48 @@ void CyFxAppStart (void) {
 
     /* Create a DMA MANUAL_IN channel for the producer socket. */
     CyU3PMemSet ((uint8_t *)&dmaCfg, 0, sizeof (dmaCfg));
-    dmaCfg.size = sizeof(usb_cdc_notification_t);
+    dmaCfg.size = 16;
     dmaCfg.count = 1;
-    dmaCfg.prodSckId = CY_FX_EP_PRODUCER_SOCKET;
-    dmaCfg.consSckId = CY_U3P_CPU_SOCKET_CONS;
+    dmaCfg.prodSckId = CY_U3P_CPU_SOCKET_PROD;
+    dmaCfg.consSckId = CY_FX_EP_NOTIFIER_SOCKET;
     dmaCfg.dmaMode = CY_U3P_DMA_MODE_BYTE;
-    dmaCfg.notification = CY_U3P_DMA_CB_PROD_EVENT;
-    dmaCfg.cb = CyFxDmaCallback;
+    dmaCfg.notification = 0;
+    dmaCfg.cb = NULL;
     dmaCfg.prodHeader = 0;
     dmaCfg.prodFooter = 0;
     dmaCfg.consHeader = 0;
     dmaCfg.prodAvailCount = 0;
-
-    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleNotifier, CY_U3P_DMA_TYPE_MANUAL_IN, &dmaCfg);
+    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleNotifier, CY_U3P_DMA_TYPE_MANUAL_OUT, &dmaCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
-        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCreate failed, Error code = %d\n", apiRetStatus);
+        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCreate Notifier failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler(apiRetStatus);
     }
+    CyU3PDmaChannelSetXfer (&glChHandleNotifier, 0);
 
-    /* Set DMA Channel transfer size */
-    apiRetStatus = CyU3PDmaChannelSetXfer (&glChHandleNotifier, CY_FX_BULKSRCSINK_DMA_TX_SIZE);
+    dmaCfg.size = 512;
+    dmaCfg.count = 1;
+    dmaCfg.prodSckId = CY_U3P_CPU_SOCKET_PROD;
+    dmaCfg.consSckId = CY_FX_EP_CONSUMER_SOCKET;
+    dmaCfg.cb = CyFxDmaCallback;
+    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleBulkSink, CY_U3P_DMA_TYPE_MANUAL_OUT, &dmaCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
-        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelSetXfer failed, Error code = %d\n", apiRetStatus);
+        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCreate Consumer failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler(apiRetStatus);
     }
+    CyU3PDmaChannelSetXfer (&glChHandleBulkSink, 0);
+
+    dmaCfg.size = 512;
+    dmaCfg.count = 1;
+    dmaCfg.prodSckId = CY_FX_EP_PRODUCER_SOCKET;
+    dmaCfg.consSckId = CY_U3P_CPU_SOCKET_CONS;
+    apiRetStatus = CyU3PDmaChannelCreate (&glChHandleBulkSrc, CY_U3P_DMA_TYPE_MANUAL_IN, &dmaCfg);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        CyU3PDebugPrint (4, (char *)"CyU3PDmaChannelCreate Producer failed, Error code = %d\n", apiRetStatus);
+        CyFxAppErrorHandler(apiRetStatus);
+    }
+    CyU3PDmaChannelSetXfer (&glChHandleBulkSrc, 0);
 
     CyU3PUsbRegisterEpEvtCallback (CyFxEpEvtCB, CYU3P_USBEP_SS_RETRY_EVT, 0x00, 0x02);
-    CyFxFillInBuffers ();
-
     /* Update the flag so that the application thread is notified of this. */
     glIsApplnActive = CyTrue;
 }
@@ -334,13 +418,13 @@ void CyFxAppStop(void) {
 
     /* Destroy the channels */
     CyU3PDmaChannelDestroy (&glChHandleNotifier);
-    //CyU3PDmaChannelDestroy (&glChHandleBulkSink);
-    //CyU3PDmaChannelDestroy (&glChHandleBulkSrc);
+    CyU3PDmaChannelDestroy (&glChHandleBulkSink);
+    CyU3PDmaChannelDestroy (&glChHandleBulkSrc);
 
     /* Flush the endpoint memory */
-    //CyU3PUsbFlushEp(CY_FX_EP_NOTIFIER);
-    //CyU3PUsbFlushEp(CY_FX_EP_PRODUCER);
-    //CyU3PUsbFlushEp(CY_FX_EP_CONSUMER);
+    CyU3PUsbFlushEp(CY_FX_EP_NOTIFIER);
+    CyU3PUsbFlushEp(CY_FX_EP_PRODUCER);
+    CyU3PUsbFlushEp(CY_FX_EP_CONSUMER);
 
     /* Disable endpoints. */
     CyU3PMemSet ((uint8_t *)&epCfg, 0, sizeof (epCfg));
@@ -352,7 +436,7 @@ void CyFxAppStop(void) {
         CyFxAppErrorHandler (apiRetStatus);
     }
 
-    /*apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_PRODUCER, &epCfg);
+    apiRetStatus = CyU3PSetEpConfig(CY_FX_EP_PRODUCER, &epCfg);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler (apiRetStatus);
@@ -362,7 +446,7 @@ void CyFxAppStop(void) {
     if (apiRetStatus != CY_U3P_SUCCESS) {
         CyU3PDebugPrint (4, (char *)"CyU3PSetEpConfig failed, Error code = %d\n", apiRetStatus);
         CyFxAppErrorHandler (apiRetStatus);
-    }*/
+    }
 }
 
 /* Callback to handle the USB setup requests. */
@@ -384,40 +468,16 @@ CyBool_t CyFxAppUSBSetupCB(uint32_t setupdat0, uint32_t setupdat1) {
     wIndex   = ((setupdat1 & CY_U3P_USB_INDEX_MASK)   >> CY_U3P_USB_INDEX_POS);
 
     if (bType == CY_U3P_USB_STANDARD_RQT) {
-        /* Handle SET_FEATURE(FUNCTION_SUSPEND) and CLEAR_FEATURE(FUNCTION_SUSPEND)
-         * requests here. It should be allowed to pass if the device is in configured
-         * state and failed otherwise. */
         if ((bTarget == CY_U3P_USB_TARGET_INTF) && ((bRequest == CY_U3P_USB_SC_SET_FEATURE)
             || (bRequest == CY_U3P_USB_SC_CLEAR_FEATURE)) && (wValue == 0)) {
             if (glIsApplnActive) {
                 CyU3PUsbAckSetup ();
-
-                /* As we have only one interface, the link can be pushed into U2 state as soon as
-                   this interface is suspended.
-                 */
-                if (bRequest == CY_U3P_USB_SC_SET_FEATURE) {
-                    glDataTransStarted = CyFalse;
-                    glForceLinkU2      = CyTrue;
-                } else {
-                    glForceLinkU2 = CyFalse;
-                }
             } else {
                 CyU3PUsbStall (0, CyTrue, CyFalse);
             }
-
             isHandled = CyTrue;
         }
 
-        /* CLEAR_FEATURE request for endpoint is always passed to the setup callback
-         * regardless of the enumeration model used. When a clear feature is received,
-         * the previous transfer has to be flushed and cleaned up. This is done at the
-         * protocol level. Since this is just a loopback operation, there is no higher
-         * level protocol. So flush the EP memory and reset the DMA channel associated
-         * with it. If there are more than one EP associated with the channel reset both
-         * the EPs. The endpoint stall and toggle / sequence number is also expected to be
-         * reset. Return CyFalse to make the library clear the stall and reset the endpoint
-         * toggle. Or invoke the CyU3PUsbStall (ep, CyFalse, CyTrue) and return CyTrue.
-         * Here we are clearing the stall. */
         if ((bTarget == CY_U3P_USB_TARGET_ENDPT) && (bRequest == CY_U3P_USB_SC_CLEAR_FEATURE)
             && (wValue == CY_U3P_USBX_FS_EP_HALT)) {
             if (glIsApplnActive) {
@@ -449,19 +509,33 @@ CyBool_t CyFxAppUSBSetupCB(uint32_t setupdat0, uint32_t setupdat1) {
                     CyU3PUsbStall (wIndex, CyFalse, CyTrue);
                     isHandled = CyTrue;
                     CyU3PUsbAckSetup ();
-
-                    CyFxFillInBuffers ();
                 }
             }
         }
     }
 
-    if (bType == CY_U3P_USB_CLASS_RQT && (bRequest == USB_CDC_GET_NTB_PARAMETERS)) {
+    if (bType == CY_U3P_USB_CLASS_RQT && (bRequest == NCM_GET_NTB_PARAMETERS)) {
         isHandled = CyTrue;
         gl_setupdat0 = setupdat0;
         gl_setupdat1 = setupdat1;
         CyU3PEventSet (&glBulkLpEvent, CYFX_USB_CTRL_TASK, CYU3P_EVENT_OR);
         CyU3PDebugPrint (2, (char *)"NTB Request\r\n");
+    }
+
+    if (bType == CY_U3P_USB_STANDARD_RQT && (bRequest == USB_REQ_SET_INTERFACE)) {
+        isHandled = CyTrue;
+        gl_setupdat0 = setupdat0;
+        gl_setupdat1 = setupdat1;
+        CyU3PEventSet (&glBulkLpEvent, CYFX_USB_CTRL_TASK, CYU3P_EVENT_OR);
+        CyU3PDebugPrint (2, (char *)"Set Interface Request\r\n");
+    }
+
+    if (bType == CY_U3P_USB_STANDARD_RQT && (bRequest == USB_REQ_GET_INTERFACE)) {
+        isHandled = CyTrue;
+        gl_setupdat0 = setupdat0;
+        gl_setupdat1 = setupdat1;
+        CyU3PEventSet (&glBulkLpEvent, CYFX_USB_CTRL_TASK, CYU3P_EVENT_OR);
+        CyU3PDebugPrint (2, (char *)"Get Interface Request\r\n");
     }
 
     return isHandled;
@@ -500,6 +574,7 @@ void CyFxAppUSBEventCB(CyU3PUsbEventType_t evtype, uint16_t evdata) {
 
     case CY_U3P_USB_EVENT_EP0_STAT_CPLT:
         glEp0StatCount++;
+        CyU3PDebugPrint (4, "EP0 Status Complete %d\r\n", glEp0StatCount);
         break;
 
     case CY_U3P_USB_EVENT_VBUS_REMOVED:
@@ -678,6 +753,20 @@ static void CyFxAppDeinit(void) {
     CyU3PThreadSleep (1000);
 }
 
+void lwipThread_Entry() {
+    net_init();
+    init_lwip();
+    CyU3PDebugPrint(1, (char *)"\nLwIP initialized\r\n");
+    while (!netif_is_up(&netif_data));
+    lwiperf_start_tcp_server_default(NULL, NULL);
+    CyU3PDebugPrint(1, (char *)"\niperf initialized\r\n");
+    
+    while(1) {
+        // Handle LwIP Traffic
+        service_traffic();
+    }
+}
+
 /* Entry function for the BulkSrcSinkAppThread. */
 void appThread_Entry(uint32_t input) {
     (void)(input);
@@ -726,35 +815,17 @@ void appThread_Entry(uint32_t input) {
 
             /* If there is a pending control request, handle it here. */
             if (eventStat & CYFX_USB_CTRL_TASK) {
-                uint8_t  bRequest, bReqType;
-                uint16_t wLength, temp;
-                uint16_t wValue, wIndex;
+                usb_control_request_t req = {
+                    .bmRequestType.direction = ((gl_setupdat0 & CY_U3P_USB_REQUEST_TYPE_MASK) & 0x80) >> 8,
+                    .bmRequestType.type = ((gl_setupdat0 & CY_U3P_USB_REQUEST_TYPE_MASK) & CY_U3P_USB_TYPE_MASK) >> 5,
+                    .bmRequestType.recipient = ((gl_setupdat0 & CY_U3P_USB_REQUEST_TYPE_MASK) & CY_U3P_USB_TARGET_MASK),
+                    .bRequest =     ((gl_setupdat0 & CY_U3P_USB_REQUEST_MASK)   >> CY_U3P_USB_REQUEST_POS),
+                    .wLength =      ((gl_setupdat1 & CY_U3P_USB_LENGTH_MASK)    >> CY_U3P_USB_LENGTH_POS),
+                    .wValue =       ((gl_setupdat0 & CY_U3P_USB_VALUE_MASK)     >> CY_U3P_USB_VALUE_POS),
+                    .wIndex =       ((gl_setupdat1 & CY_U3P_USB_INDEX_MASK)     >> CY_U3P_USB_INDEX_POS)
+                };
 
-                /* Decode the fields from the setup request. */
-                bReqType = (gl_setupdat0 & CY_U3P_USB_REQUEST_TYPE_MASK);
-                bRequest = ((gl_setupdat0 & CY_U3P_USB_REQUEST_MASK) >> CY_U3P_USB_REQUEST_POS);
-                wLength  = ((gl_setupdat1 & CY_U3P_USB_LENGTH_MASK)  >> CY_U3P_USB_LENGTH_POS);
-                wValue   = ((gl_setupdat0 & CY_U3P_USB_VALUE_MASK) >> CY_U3P_USB_VALUE_POS);
-                wIndex   = ((gl_setupdat1 & CY_U3P_USB_INDEX_MASK) >> CY_U3P_USB_INDEX_POS);
-
-                if((bReqType & CY_U3P_USB_TYPE_MASK) == CY_U3P_USB_CLASS_RQT) {
-                    if((bRequest == USB_CDC_GET_NTB_PARAMETERS)) {
-                        CyU3PDebugPrint(4, (char *)"MAIN: NTB Request\r\n");
-                        CyU3PUsbSendEP0Data(sizeof(usb_cdc_ncm_ntb_parameters_t), (uint8_t*)&ntb_parameters);
-                        break;
-                    }
-                    if(bRequest == USB_CDC_GET_NTB_INPUT_SIZE) {
-                        CyU3PDebugPrint(4, (char *)"MAIN: GetNTBInputSize\r\n");
-                        CyU3PUsbSendEP0Data(sizeof(usb_cdc_ncm_ndp_input_size_t), (uint8_t*)&ntb_size);
-                        break;
-                    }
-                    if(bRequest == USB_CDC_SET_NTB_INPUT_SIZE) {
-                        uint16_t receivedBytes;
-                        CyU3PUsbGetEP0Data(sizeof(usb_cdc_ncm_ndp_input_size_t), (uint8_t*)&ntb_size, &receivedBytes);
-                        CyU3PDebugPrint(4, (char *)"MAIN: SetNTBInputSize - %d Bytes - %d\r\n", receivedBytes, ntb_size.dwNtbInMaxSize);
-                        break;
-                    }
-                } else {
+                if(!net_usb_control_transfer(&req)) {
                     CyU3PUsbStall(0, CyTrue, CyFalse);
                 }
             }
@@ -828,6 +899,7 @@ void appThread_Entry(uint32_t input) {
 /* Application define function which creates the threads. */
 void CyFxApplicationDefine(void) {
     void *ptr = NULL;
+    void *lwip = NULL;
     uint32_t ret = CY_U3P_SUCCESS;
 
     /* Create an event flag group that will be used for signalling the application thread. */
@@ -839,6 +911,8 @@ void CyFxApplicationDefine(void) {
 
     /* Allocate the memory for the threads */
     ptr = CyU3PMemAlloc (CY_FX_BULKSRCSINK_THREAD_STACK);
+    
+    lwip = CyU3PMemAlloc (CY_FX_BULKSRCSINK_THREAD_STACK);
 
     /* Create the thread for the application */
     ret = CyU3PThreadCreate (&appThread,                           /* App thread structure */
@@ -847,8 +921,8 @@ void CyFxApplicationDefine(void) {
                           0,                                       /* No input parameter to thread */
                           ptr,                                     /* Pointer to the allocated thread stack */
                           CY_FX_BULKSRCSINK_THREAD_STACK,          /* App thread stack size */
-                          CY_FX_BULKSRCSINK_THREAD_PRIORITY,       /* App thread priority */
-                          CY_FX_BULKSRCSINK_THREAD_PRIORITY,       /* App thread priority */
+                          CY_FX_BULKSRCSINK_THREAD_PRIORITY-1,       /* App thread priority */
+                          CY_FX_BULKSRCSINK_THREAD_PRIORITY-1,       /* App thread priority */
                           CYU3P_NO_TIME_SLICE,                     /* No time slice for the application thread */
                           CYU3P_AUTO_START                         /* Start the thread immediately */
                           );
@@ -863,6 +937,29 @@ void CyFxApplicationDefine(void) {
         /* Loop indefinitely */
         while(1);
     }
+
+    ret = CyU3PThreadCreate (&lwipThread, 
+                            (char *)"22:LwIP", 
+                            lwipThread_Entry, 
+                            0,
+                            lwip, 
+                            CY_FX_BULKSRCSINK_THREAD_STACK,     
+                            CY_FX_BULKSRCSINK_THREAD_PRIORITY,
+                            CY_FX_BULKSRCSINK_THREAD_PRIORITY,
+                            CYU3P_NO_TIME_SLICE,                
+                            CYU3P_AUTO_START                    
+                            );
+
+    if (ret != 0) {
+        /* Thread Creation failed with the error code retThrdCreate */
+
+        /* Add custom recovery or debug actions here */
+
+        /* Application cannot continue */
+        /* Loop indefinitely */
+        while(1);
+    }
+
 }
 
 /*
@@ -927,4 +1024,105 @@ handle_fatal_error:
 
     /* Cannot recover from this error. */
     while (1);
+}
+
+/* lwip has provision for using a mutex, when applicable */
+sys_prot_t sys_arch_protect(void) {
+  return 0;
+}
+void sys_arch_unprotect(sys_prot_t pval) {
+  (void) pval;
+}
+
+/* lwip needs a millisecond time source, and the TinyUSB board support code has one available */
+uint32_t sys_now(void) {
+  return CyU3PGetTime();
+}
+
+bool usb_transfer_ep0 ( usb_control_request_t * request, void* buffer, uint16_t bytes ) {
+    (void)(request);
+    CyU3PDebugPrint(4, (char *)"NET USB TRANSFER EP0\r\n");
+    CyU3PUsbSendEP0Data(bytes, buffer);
+    return true;
+}
+
+bool usb_transfer_ep ( uint8_t ep_addr, void* buffer, uint16_t bytes ) {
+    CyU3PDebugPrint(4, (char *)"NET USB TRANSFER EP\r\n");
+    if( ep_addr == NCM_EP_NOTIFY ) {
+        CyU3PDebugPrint(4, (char *)"\tNCM EP NOTIFY\r\n");
+        notifyBuf.buffer = NULL;
+        notifyBuf.status = 0;
+        notifyBuf.size = 16;
+        notifyBuf.count = bytes;
+        CyU3PReturnStatus_t status;
+        status = CyU3PDmaChannelGetBuffer (&glChHandleNotifier, &notifyBuf, 1000);
+        if (status != CY_U3P_SUCCESS) {
+            // Reset Channel and reallocate buffer
+            CyU3PDmaChannelReset (&glChHandleNotifier);
+            CyU3PDmaChannelSetXfer (&glChHandleNotifier, 0);
+            status = CyU3PDmaChannelGetBuffer (&glChHandleNotifier, &notifyBuf, 1000);
+            if (status != CY_U3P_SUCCESS) {
+                return false;
+            }
+        }
+        /* Copy Report Data into the output buffer */
+        memcpy(notifyBuf.buffer, buffer, bytes);
+        status = CyU3PDmaChannelCommitBuffer (&glChHandleNotifier, bytes, 0);
+        if (status != CY_U3P_SUCCESS) {
+            // Reset Channel
+            CyU3PDmaChannelReset (&glChHandleNotifier);
+            CyU3PDmaChannelSetXfer (&glChHandleNotifier, 0);
+        }
+        /* Wait for 2 msec after sending each packet */
+        CyU3PDebugPrint (4, "\tSent Notification\r\n");
+        return true;
+    } if ( ep_addr == NCM_EP_DATA_OUT ) {
+        CyU3PDebugPrint(4, (char *)"\tNCM EP OUT\r\n");
+        outBuf.buffer = NULL;
+        outBuf.status = 0;
+        outBuf.size = NCM_NTB_MAX_SIZE;
+        outBuf.count = bytes;
+        CyU3PReturnStatus_t status;
+        status = CyU3PDmaChannelGetBuffer (&glChHandleBulkSink, &outBuf, 1000);
+        if (status != CY_U3P_SUCCESS) {
+            // Reset Channel and reallocate buffer
+            CyU3PDmaChannelReset (&glChHandleBulkSink);
+            CyU3PDmaChannelSetXfer (&glChHandleBulkSink, 0);
+            status = CyU3PDmaChannelGetBuffer (&glChHandleBulkSink, &outBuf, 1000);
+            if (status != CY_U3P_SUCCESS) {
+                return false;
+            }
+        }
+        /* Copy Report Data into the output buffer */
+        memcpy(outBuf.buffer, buffer, bytes);
+        status = CyU3PDmaChannelCommitBuffer (&glChHandleBulkSink, 2, 0);
+        if (status != CY_U3P_SUCCESS) {
+            // Reset Channel
+            CyU3PDmaChannelReset (&glChHandleBulkSink);
+            CyU3PDmaChannelSetXfer (&glChHandleBulkSink, 0);
+        }
+    } if ( ep_addr == NCM_EP_DATA_IN ) {
+        CyU3PDebugPrint(4, (char *)"\tNCM EP IN\r\n");
+    }
+    
+    return false;
+}
+
+bool usb_control_status( usb_control_request_t * request ) {
+    CyU3PDebugPrint(4, (char *)"NET USB CONTROL STATUS\r\n");
+    CyU3PUsbAckSetup();
+    return true;
+}
+
+bool usb_ep_busy ( uint8_t ep_addr ) {
+    CyU3PDebugPrint(4, (char *)"NET USB EP BUSY\r\n");
+
+    
+    return false;
+}
+
+int memcmp(const void *vl, const void *vr, size_t n) {
+	const unsigned char *l=vl, *r=vr;
+	for (; n && *l == *r; n--, l++, r++);
+	return n ? *l-*r : 0;
 }
