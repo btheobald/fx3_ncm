@@ -829,10 +829,6 @@ void appThread_Entry(uint32_t input) {
                     CyU3PUsbStall(0, CyTrue, CyFalse);
                 }
             }
-
-            if( CyU3PGetTime() > 5000 ) {
-                
-            }
         }
 
         if (glSrcEpFlush) {
